@@ -36,6 +36,7 @@ NSString *const RNVIErrorDomain = @"org.oblador.react-native-vector-icons";
 @synthesize bridge = _bridge;
 RCT_EXPORT_MODULE();
 
+#if TARGET_OS_IPHONE
 - (NSString *)hexStringFromColor:(UIColor *)color
 {
   const CGFloat *components = CGColorGetComponents(color.CGColor);
@@ -49,7 +50,23 @@ RCT_EXPORT_MODULE();
           lroundf(g * 255),
           lroundf(b * 255)];
 }
+#else
+- (NSString *)hexStringFromColor:(NSColor *)color
+{
+  const CGFloat *components = CGColorGetComponents(color.CGColor);
 
+  CGFloat r = components[0];
+  CGFloat g = components[1];
+  CGFloat b = components[2];
+
+  return [NSString stringWithFormat:@"#%02lX%02lX%02lX",
+          lroundf(r * 255),
+          lroundf(g * 255),
+          lroundf(b * 255)];
+}
+#endif
+
+#if TARGET_OS_IPHONE
 - (NSString *)generateFilePath:(NSString *)glyph withFontName:(NSString *)fontName
                                                  withFontSize:(CGFloat)fontSize
                                                  withColor:(UIColor *)color
@@ -65,7 +82,25 @@ RCT_EXPORT_MODULE();
 
   return fileName;
 }
+#else
+- (NSString *)generateFilePath:(NSString *)glyph withFontName:(NSString *)fontName
+                                                 withFontSize:(CGFloat)fontSize
+                                                 withColor:(NSColor *)color
+                                                 withExtraIdentifier:(NSString *)identifier
+{
+  CGFloat screenScale = RCTScreenScale();
+  NSString *hexColor = [self hexStringFromColor:color];
+  NSString *fileName = [NSString stringWithFormat:@"%@RNVectorIcons_%@_%@_%hu_%.f%@@%.fx.png",
+                                                  NSTemporaryDirectory(),
+                                                  identifier, fontName,
+                                                  [glyph characterAtIndex:0],
+                                                  fontSize, hexColor, screenScale];
 
+  return fileName;
+}
+#endif
+
+#if TARGET_OS_IPHONE
 - (BOOL)createAndSaveGlyphImage:(NSString *)glyph withFont:(UIFont *)font
                                                   withFilePath:(NSString *)filePath
                                                   withColor:(UIColor *)color
@@ -83,12 +118,48 @@ RCT_EXPORT_MODULE();
     UIGraphicsEndImageContext();
 
     NSData *imageData = UIImagePNGRepresentation(iconImage);
-    return [imageData writeToFile:filePath atomically:YES];
+    return [imageDatae writeToFile:filePath atomically:YES];
   }
 
   return YES;
 }
+#else
+- (BOOL)createAndSaveGlyphImage:(NSString *)glyph withFont:(NSFont *)font
+                                                  withFilePath:(NSString *)filePath
+                                                  withColor:(NSColor *)color
+{
+  if(![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {
+    // No cached icon exists, we need to create it and persist to disk
 
+      NSAttributedString *attributedString = [[NSAttributedString alloc] initWithString:glyph attributes:@{NSFontAttributeName: font, NSForegroundColorAttributeName: color}];
+
+      CGSize iconSize = [attributedString size];
+      
+      NSSize size = NSMakeSize(iconSize, iconSize);
+      NSImage* im = [[NSImage alloc] initWithSize:size];
+      NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+                                  initWithBitmapDataPlanes:NULL
+                                                pixelsWide:size.width
+                                                pixelsHigh:size.height
+                                             bitsPerSample:8
+                                           samplesPerPixel:4
+                                                  hasAlpha:YES
+                                                  isPlanar:NO
+                                            colorSpaceName:NSCalibratedRGBColorSpace
+                                               bytesPerRow:0
+                                              bitsPerPixel:0];
+      [im addRepresentation:rep];
+      [im lockFocus];
+      [attributedString drawAtPoint:CGPointMake(0, 0)];
+      [im unlockFocus];
+      return [[im TIFFRepresentation] writeToFile:filePath atomically:YES];
+  }
+
+  return YES;
+}
+#endif
+
+#if TARGET_OS_IPHONE
 - (NSString *)createGlyphImagePathForFont:(NSString *)fontName
                                 withGlyph:(NSString *)glyph
                                 withFontSize:(CGFloat)fontSize
@@ -111,7 +182,31 @@ RCT_EXPORT_MODULE();
   }
   return filePath;
 }
+#else
+- (NSString *)createGlyphImagePathForFont:(NSString *)fontName
+                                withGlyph:(NSString *)glyph
+                                withFontSize:(CGFloat)fontSize
+                                withColor:(NSColor *)color
+                                withError:(NSError **)
+    NSFont *font = [NSFont fontWithName:fontName size:fontSize];
+    NSString *filePath = [self generateFilePath:glyph withFontName:fontName
+                                                    withFontSize:fontSize
+                                                    withColor:color
+                                                    withExtraIdentifier:@""];
 
+    BOOL success = [self createAndSaveGlyphImage:glyph withFont:font
+                                                     withFilePath:filePath
+                                                     withColor:color];
+
+    if (!success) {
+        *error = [NSError errorWithDomain:RNVIErrorDomain code:RNVIGenericError userInfo:@{NSLocalizedDescriptionKey: @"Failed to write rendered icon image"}];
+        return nil;
+    }
+    return filePath;
+}
+#endif
+
+#if TARGET_OS_IPHONE
 RCT_EXPORT_METHOD(
   getImageForFont:(NSString *)fontName
   withGlyph:(NSString *)glyph
@@ -132,7 +227,30 @@ RCT_EXPORT_METHOD(
     resolve(filePath);
   }
 }
+#else
+RCT_EXPORT_METHOD(
+  getImageForFont:(NSString *)fontName
+  withGlyph:(NSString *)glyph
+  withFontSize:(CGFloat)fontSize
+  withColor:(NSColor *)color
+  resolver:(RCTPromiseResolveBlock)resolve
+  rejecter:(RCTPromiseRejectBlock)reject
+) {
+  NSError *error = nil;
+  NSString *filePath = [self createGlyphImagePathForFont:fontName
+                                               withGlyph:glyph
+                                               withFontSize:fontSize
+                                               withColor:color
+                                               withError:&error];
+  if (error != nil) {
+    reject([NSString stringWithFormat:@"%ld", (long)error.code], error.localizedDescription, error);
+  } else {
+    resolve(filePath);
+  }
+}
+#endif
 
+#if TARGET_OS_IPHONE
 RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(
   getImageForFontSync:(NSString *)fontName
   withGlyph:(NSString *)glyph
@@ -146,6 +264,21 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(
                                  withColor:color
                                  withError:&error];
 }
+#else
+RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(
+  getImageForFontSync:(NSString *)fontName
+  withGlyph:(NSString *)glyph
+  withFontSize:(CGFloat)fontSize
+  withColor:(NSColor *)color
+) {
+  NSError *error = nil;
+  return [self createGlyphImagePathForFont:fontName
+                                 withGlyph:glyph
+                                 withFontSize:fontSize
+                                 withColor:color
+                                 withError:&error];
+}
+#endif
 
 RCT_EXPORT_METHOD(
   loadFontWithFileName:(NSString *)fontFileName
